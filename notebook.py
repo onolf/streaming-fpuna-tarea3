@@ -84,7 +84,7 @@ def _(datetime):
         except ValueError as e:
             raise ValueError(f"Invalid ISO-8601 timestamp: {raw_value}") from e
 
-    return
+    return (parse_utc,)
 
 
 @app.cell
@@ -128,11 +128,11 @@ def _(datetime):
     
         return window_start, window_end
 
-    return
+    return (assign_fixed_window,)
 
 
 @app.cell
-def _(Any, Iterable):
+def _(Any, Iterable, assign_fixed_window, parse_utc):
     def summarize_payments(
         events: Iterable[dict[str, Any]],
         *,
@@ -153,7 +153,128 @@ def _(Any, Iterable):
         `reason`. `revision` es verdadero cuando un evento aceptado llega
         después del cierre de su ventana.
         """
-        raise NotImplementedError("TODO 3: implementar summarize_payments")
+        from datetime import datetime, timezone
+
+        # Estructura para acumular totales: {(merchant_id, window_start, window_end): total}
+        accumulated_totals = {}
+
+        # Estructuras auxiliares para control (duplicados, etc.)
+        seen_events_per_merchant = set()
+        audit_list = []
+
+        # Filtrar solo los eventos confirmados
+        confirmed_events = [
+            event
+            for event in events
+            if event.get("status") == "CONFIRMED"
+        ]
+
+        # Parsear timestamps y ordenar eventos por event_time para procesamiento determinista
+        parsed_events = []
+        for event in confirmed_events:
+            try:
+                event_time_dt = parse_utc(event["event_time"])
+                arrival_time_dt = parse_utc(event["arrival_time"])
+                event_time_ts = event_time_dt.timestamp()
+                arrival_time_ts = arrival_time_dt.timestamp()
+                parsed_events.append({
+                    **event,
+                    "_event_time_dt": event_time_dt,
+                    "_arrival_time_dt": arrival_time_dt,
+                    "_event_time_ts": event_time_ts,
+                    "_arrival_time_ts": arrival_time_ts,
+                })
+            except (KeyError, ValueError) as e:
+                # Si falta event_time o arrival_time, o son inválidos, saltar evento
+                continue
+
+        sorted_events = sorted(
+            parsed_events,
+            key=lambda x: (x["_event_time_ts"], x.get("event_id", ""))
+        )
+
+        # Calcular max_event_time para la marca de agua global
+        max_event_time = max((e["_event_time_ts"] for e in sorted_events), default=0)
+
+        # Calcular la marca de agua (watermark) global basada en el evento más avanzado visto
+        watermark = max_event_time - allowed_lateness_seconds
+
+        for event in sorted_events:
+            event_id = event.get("event_id")
+            merchant_id = event.get("merchant_id")
+            event_time_ts = event["_event_time_ts"]
+            arrival_time_ts = event["_arrival_time_ts"]
+            event_time_dt = event["_event_time_dt"]
+
+            delay_seconds = arrival_time_ts - event_time_ts
+
+            # Verificar duplicados
+            duplicate = False
+            if deduplicate:
+                event_key = (merchant_id, event_id)
+                if event_key in seen_events_per_merchant:
+                    duplicate = True
+                else:
+                    seen_events_per_merchant.add(event_key)
+
+            # Calcular ventana de tiempo usando event_time
+            window_start_dt, window_end_dt = assign_fixed_window(event_time_dt, window_seconds)
+            window_start_ts = window_start_dt.timestamp()
+            window_end_ts = window_end_dt.timestamp()
+
+            # Verificar si es demasiado tarde (too_late)
+            # too_late si event_time < watermark O si arrival_time > window_end + allowed_lateness
+            too_late = False
+            if event_time_ts < watermark or arrival_time_ts > (window_end_ts + allowed_lateness_seconds):
+                too_late = True
+
+            # Determinar si se acepta
+            accepted = not duplicate and not too_late
+
+            # Determinar si hay revisión (llega tarde pero dentro del margen permitido de latencia)
+            # revision = accepted y arrival_time > window_end (llegó después del cierre de ventana pero dentro de allowed_lateness)
+            revision = False
+            if accepted and arrival_time_ts > window_end_ts:
+                revision = True
+
+            reason = "accepted"
+            if duplicate:
+                reason = "duplicate"
+            elif too_late:
+                reason = "too_late"
+
+            if accepted:
+                key = (merchant_id, window_start_ts, window_end_ts)
+                amount = event.get("amount", 0)
+                accumulated_totals[key] = accumulated_totals.get(key, 0) + amount
+
+            audit_list.append({
+                "event_id": event_id,
+                "merchant_id": merchant_id,
+                "delay_seconds": delay_seconds,
+                "duplicate": duplicate,
+                "too_late": too_late,
+                "accepted": accepted,
+                "revision": revision,
+                "reason": reason,
+            })
+
+        # Construir la lista de totales con formato ISO-8601
+        totals_list = []
+        for (merchant_id, w_start_ts, w_end_ts), total in sorted(
+            accumulated_totals.items(),
+            key=lambda x: (x[0][0], x[0][1])
+        ):
+            dt_start = datetime.fromtimestamp(w_start_ts, tz=timezone.utc).isoformat()
+            dt_end = datetime.fromtimestamp(w_end_ts, tz=timezone.utc).isoformat()
+            totals_list.append({
+                "merchant_id": merchant_id,
+                "window_start": dt_start,
+                "window_end": dt_end,
+                "total": total,
+            })
+
+        return totals_list, audit_list
 
     return
 
