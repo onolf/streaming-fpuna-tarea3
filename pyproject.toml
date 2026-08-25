@@ -8,6 +8,7 @@ dependencies = [
   "apache-beam==2.74.0",
   "betterproto==2.0.0b6",
   "marimo>=0.19,<1",
+  "pydantic-ai>=2.34.0",
 ]
 
 [dependency-groups]
