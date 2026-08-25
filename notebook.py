@@ -112,7 +112,21 @@ def _(datetime):
         size_seconds: int = 60,
     ) -> tuple[datetime, datetime]:
         """Retornar los límites [inicio, fin) de la ventana fija."""
-        raise NotImplementedError("TODO 2: implementar assign_fixed_window")
+        if not isinstance(timestamp, datetime):
+            raise ValueError(f"Expected datetime, got {type(timestamp).__name__}")
+    
+        # Obtener epoch seconds usando el método nativo de datetime
+        ts_seconds = timestamp.timestamp()
+    
+        # Calcular el inicio de la ventana alineado al tamaño
+        window_start_seconds = int(ts_seconds // size_seconds * size_seconds)
+    
+        # Reconstruir datetimes preservando la zona horaria original
+        tz = timestamp.tzinfo
+        window_start = datetime.fromtimestamp(window_start_seconds, tz=tz)
+        window_end = datetime.fromtimestamp(window_start_seconds + size_seconds, tz=tz)
+    
+        return window_start, window_end
 
     return
 
