@@ -73,7 +73,16 @@ def _(mo):
 def _(datetime):
     def parse_utc(raw_value: str) -> datetime:
         """Convertir un timestamp ISO-8601 terminado en Z a datetime UTC."""
-        raise NotImplementedError("TODO 1: implementar parse_utc")
+        if not isinstance(raw_value, str):
+            raise ValueError(f"Expected string, got {type(raw_value).__name__}")
+        if not raw_value.endswith("Z"):
+            raise ValueError(f"Timestamp must end with 'Z' (UTC), got: {raw_value}")
+        # Replace Z with +00:00 for fromisoformat compatibility
+        normalized = raw_value[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError as e:
+            raise ValueError(f"Invalid ISO-8601 timestamp: {raw_value}") from e
 
     return
 
@@ -159,7 +168,7 @@ def _(mo):
 
 
 @app.cell
-def _(Any, beam, parse_utc):
+def _(Any):
     def build_windowed_totals_pipeline(
         pipeline: Any,
         events: list[dict[str, Any]],
@@ -179,15 +188,7 @@ def _(Any, beam, parse_utc):
 
 
 @app.cell
-def _(
-    Any,
-    SetStateSpec,
-    StrUtf8Coder,
-    TimeDomain,
-    TimerSpec,
-    beam,
-    on_timer,
-):
+def _(Any, SetStateSpec, StrUtf8Coder, TimeDomain, TimerSpec, beam, on_timer):
     class DeduplicatePayments(beam.DoFn):
         """Eliminar event_id repetidos dentro de cada clave de comercio."""
 
