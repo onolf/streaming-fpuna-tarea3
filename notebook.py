@@ -434,7 +434,40 @@ def _(Any):
         Configurar un pane on-time por watermark, una estimación early por
         processing time, revisiones late y modo ACCUMULATING.
         """
-        raise NotImplementedError("TODO 6: implementar build_trigger_policy")
+        from apache_beam.transforms.window import (
+            WindowInto,
+            FixedWindows,
+            Duration,
+        )
+        from apache_beam.transforms.trigger import (
+            AfterWatermark,
+            AfterProcessingTime,
+            AccumulationMode,
+        )
+
+        # Componer el trigger:
+        # - on-time: el pane principal se dispara cuando el watermark cruza el
+        #   final de la ventana (cálculo confirmado del total).
+        # - early: estimaciones periódicas basadas en processing time (5s) para
+        #   disponer de resultados parciales antes del cierre de la ventana.
+        # - late: revisiones periódicas cada 10s de processing time, que
+        #   re-emiten el pane cuando llega un evento aceptado dentro de la
+        #   ventana de lateness permitida.
+        # - accumulation_mode ACCUMULATING: cada pane tardío contiene el total
+        #   acumulado hasta ese momento, no sólo el delta; esto es coherente
+        #   con la lógica de CombinePerKey(sum) y permite que un downstream
+        #   idempotente reciba totales consistentes para reemplazar filas.
+        trigger = AfterWatermark(
+            early=AfterProcessingTime(5),
+            late=AfterProcessingTime(10),
+        )
+
+        return WindowInto(
+            FixedWindows(window_seconds),
+            allowed_lateness=Duration(seconds=allowed_lateness_seconds),
+            trigger=trigger,
+            accumulation_mode=AccumulationMode.ACCUMULATING,
+        )
 
     return
 
