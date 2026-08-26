@@ -325,8 +325,6 @@ def _(
         Usar Create, TimestampedValue, Filter, WindowInto, una clave por
         comercio, CombinePerKey y metadatos de WindowParam.
         """
-
-
         class _FormatTotalsDoFn(beam.DoFn):
             """Formatear totales por comercio agregando metadatos de ventana."""
 
@@ -445,8 +443,6 @@ def _(
         Configurar un pane on-time por watermark, una estimación early por
         processing time, revisiones late y modo ACCUMULATING.
         """
-
-
         # Componer el trigger:
         # - on-time: el pane principal se dispara cuando el watermark cruza el
         #   final de la ventana (cálculo confirmado del total).
