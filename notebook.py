@@ -315,6 +315,8 @@ def _(Any, beam, parse_utc):
         Usar Create, TimestampedValue, Filter, WindowInto, una clave por
         comercio, CombinePerKey y metadatos de WindowParam.
         """
+        from datetime import timezone
+
         class _FormatTotalsDoFn(beam.DoFn):
             """Formatear totales por comercio agregando metadatos de ventana."""
 
@@ -324,10 +326,17 @@ def _(Any, beam, parse_utc):
                 window=beam.DoFn.WindowParam,
             ):
                 merchant_id, total = element
+                # `to_utc_datetime` devuelve un datetime naive en UTC; se le
+                # adjunta la zona para que el ISO-8601 emitido coincida con el
+                # del oráculo determinista (sufijo +00:00).
                 yield {
                     "merchant_id": merchant_id,
-                    "window_start": window.start.to_utc_datetime(has_tz=True).isoformat(),
-                    "window_end": window.end.to_utc_datetime(has_tz=True).isoformat(),
+                    "window_start": window.start.to_utc_datetime()
+                    .replace(tzinfo=timezone.utc)
+                    .isoformat(),
+                    "window_end": window.end.to_utc_datetime()
+                    .replace(tzinfo=timezone.utc)
+                    .isoformat(),
                     "total": total,
                 }
 
@@ -341,19 +350,21 @@ def _(Any, beam, parse_utc):
                 lambda event: event.get("status") == "CONFIRMED"
             )
             | "AttachEventTime" >> beam.Map(
-                lambda event: beam.transforms.window.TimestampedValue(
+                lambda event: beam.window.TimestampedValue(
                     event, parse_utc(event["event_time"]).timestamp()
                 )
             )
         )
 
-        # Paso 4: aplicar ventana fija con lateness permitido y triggers acumulativos
+        # Paso 4: ventana fija por event time con tolerancia de lateness.
+        # Se deja el trigger por defecto (un pane cuando el watermark cruza el
+        # fin de la ventana): la política de panes early/late para streaming
+        # vive en `build_trigger_policy`.
         windowed_events = (
             timestamped_events
             | "WindowInto" >> beam.WindowInto(
-                beam.transforms.window.FixedWindows(window_seconds),
+                beam.window.FixedWindows(window_seconds),
                 allowed_lateness=beam.utils.timestamp.Duration(seconds=120),
-                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
         )
 
@@ -424,6 +435,21 @@ def _(Any, beam):
         Configurar un pane on-time por watermark, una estimación early por
         processing time, revisiones late y modo ACCUMULATING.
         """
+
+        class _Seconds(beam.utils.timestamp.Duration):
+            """Duración que además expone su valor en segundos.
+
+            `Duration` sólo guarda `micros`; `Duration.of` devuelve la misma
+            instancia cuando ya recibe una `Duration`, así que esta subclase
+            sobrevive intacta dentro de `FixedWindows.size` y de
+            `Windowing.allowed_lateness` y permite inspeccionar la política en
+            segundos sin convertir micros a mano.
+            """
+
+            @property
+            def seconds(self) -> float:
+                return self.micros / 1_000_000
+
         # Componer el trigger:
         # - on-time: el pane principal se dispara cuando el watermark cruza el
         #   final de la ventana (cálculo confirmado del total).
@@ -442,8 +468,8 @@ def _(Any, beam):
         )
 
         return beam.WindowInto(
-            beam.transforms.window.FixedWindows(window_seconds),
-            allowed_lateness=beam.utils.timestamp.Duration(seconds=allowed_lateness_seconds),
+            beam.window.FixedWindows(_Seconds(seconds=window_seconds)),
+            allowed_lateness=_Seconds(seconds=allowed_lateness_seconds),
             trigger=trigger,
             accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
         )
@@ -499,50 +525,36 @@ def _(Any):
         En modo idempotente, múltiples intentos del mismo resultado deben dejar
         una sola fila materializada. En modo append, cada intento agrega una.
         """
-        # Estructuras internas del sink según el modo de operación.
-        # POST append-only usa una lista; UPSERT idempotente usa un dict
-        # indexado por la clave lógica para que reintentos sobrescriban.
+        # Estructuras internas del sink según el contrato de escritura:
+        # POST append-only acumula en una lista; UPSERT idempotente indexa por
+        # clave lógica para que un reintento sobrescriba la misma entidad.
+        operation = "UPSERT" if idempotent else "POST"
         audit: list[dict[str, Any]] = []
+        upsert_sink: dict[str, dict[str, Any]] = {}
+        append_sink: list[dict[str, Any]] = []
 
-        if idempotent:
-            # Modo UPSERT idempotente: el segundo intento del mismo resultado
-            # reemplaza la fila existente en lugar de duplicarla.
-            upsert_sink: dict[str, dict[str, Any]] = {}
-            for attempt_number in range(1, attempts + 1):
-                for result_row in results:
-                    idempotency_key = make_idempotency_key(result_row)
-                    audit.append({
-                        "attempt": attempt_number,
-                        "operation": "UPSERT",
-                        "idempotency_key": idempotency_key,
-                        "row": result_row,
-                    })
+        for attempt_number in range(1, attempts + 1):
+            for result_row in results:
+                idempotency_key = make_idempotency_key(result_row)
+                # La fila escrita transporta su propia clave lógica: es el dato
+                # con el que el sink reconoce el reintento del mismo resultado.
+                written_row = {**result_row, "idempotency_key": idempotency_key}
+                audit.append({
+                    "attempt": attempt_number,
+                    "operation": operation,
+                    "idempotency_key": idempotency_key,
+                    "row": written_row,
+                })
+                if idempotent:
                     # La sobrescritura por clave garantiza una sola entidad final.
-                    upsert_sink[idempotency_key] = {
-                        **result_row,
-                        "idempotency_key": idempotency_key,
-                    }
-            # El estado visible del sink son los valores almacenados por clave.
-            materialized = list(upsert_sink.values())
-        else:
-            # Modo POST append-only: cada intento genera una fila nueva
-            # aunque la clave lógica sea la misma.
-            append_sink: list[dict[str, Any]] = []
-            for attempt_number in range(1, attempts + 1):
-                for result_row in results:
-                    idempotency_key = make_idempotency_key(result_row)
-                    audit.append({
-                        "attempt": attempt_number,
-                        "operation": "POST",
-                        "idempotency_key": idempotency_key,
-                        "row": result_row,
-                    })
+                    upsert_sink[idempotency_key] = written_row
+                else:
                     # El append siempre acumula una fila adicional.
-                    append_sink.append({
-                        **result_row,
-                        "idempotency_key": idempotency_key,
-                    })
-            materialized = append_sink
+                    append_sink.append(written_row)
+
+        # El estado visible del sink: valores por clave (UPSERT) o toda la
+        # secuencia de intentos (POST).
+        materialized = list(upsert_sink.values()) if idempotent else append_sink
 
         return materialized, audit
 
