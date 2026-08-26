@@ -303,17 +303,7 @@ def _(mo):
 
 
 @app.cell
-def _(
-    AccumulationMode,
-    AfterProcessingTime,
-    AfterWatermark,
-    Any,
-    Duration,
-    FixedWindows,
-    TimestampedValue,
-    beam,
-    parse_utc,
-):
+def _(Any, beam, parse_utc):
     def build_windowed_totals_pipeline(
         pipeline: Any,
         events: list[dict[str, Any]],
@@ -336,8 +326,8 @@ def _(
                 merchant_id, total = element
                 yield {
                     "merchant_id": merchant_id,
-                    "window_start": window.start.to_utc_datetime().isoformat(),
-                    "window_end": window.end.to_utc_datetime().isoformat(),
+                    "window_start": window.start.to_utc_datetime(has_tz=True).isoformat(),
+                    "window_end": window.end.to_utc_datetime(has_tz=True).isoformat(),
                     "total": total,
                 }
 
@@ -351,7 +341,7 @@ def _(
                 lambda event: event.get("status") == "CONFIRMED"
             )
             | "AttachEventTime" >> beam.Map(
-                lambda event: TimestampedValue(
+                lambda event: beam.transforms.window.TimestampedValue(
                     event, parse_utc(event["event_time"]).timestamp()
                 )
             )
@@ -361,10 +351,9 @@ def _(
         windowed_events = (
             timestamped_events
             | "WindowInto" >> beam.WindowInto(
-                FixedWindows(window_seconds),
-                allowed_lateness=Duration(seconds=120),
-                trigger=AfterWatermark(early=AfterProcessingTime(5)),
-                accumulation_mode=AccumulationMode.ACCUMULATING,
+                beam.transforms.window.FixedWindows(window_seconds),
+                allowed_lateness=beam.utils.timestamp.Duration(seconds=120),
+                accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
             )
         )
 
@@ -424,15 +413,7 @@ def _(Any, SetStateSpec, StrUtf8Coder, TimeDomain, TimerSpec, beam, on_timer):
 
 
 @app.cell
-def _(
-    AccumulationMode,
-    AfterProcessingTime,
-    AfterWatermark,
-    Any,
-    Duration,
-    FixedWindows,
-    WindowInto,
-):
+def _(Any, beam):
     def build_trigger_policy(
         *,
         window_seconds: int = 60,
@@ -455,16 +436,16 @@ def _(
         #   acumulado hasta ese momento, no sólo el delta; esto es coherente
         #   con la lógica de CombinePerKey(sum) y permite que un downstream
         #   idempotente reciba totales consistentes para reemplazar filas.
-        trigger = AfterWatermark(
-            early=AfterProcessingTime(5),
-            late=AfterProcessingTime(10),
+        trigger = beam.transforms.trigger.AfterWatermark(
+            early=beam.transforms.trigger.AfterProcessingTime(5),
+            late=beam.transforms.trigger.AfterProcessingTime(10),
         )
 
-        return WindowInto(
-            FixedWindows(window_seconds),
-            allowed_lateness=Duration(seconds=allowed_lateness_seconds),
+        return beam.WindowInto(
+            beam.transforms.window.FixedWindows(window_seconds),
+            allowed_lateness=beam.utils.timestamp.Duration(seconds=allowed_lateness_seconds),
             trigger=trigger,
-            accumulation_mode=AccumulationMode.ACCUMULATING,
+            accumulation_mode=beam.transforms.trigger.AccumulationMode.ACCUMULATING,
         )
 
     return
