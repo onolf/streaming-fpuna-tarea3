@@ -303,7 +303,17 @@ def _(mo):
 
 
 @app.cell
-def _(Any, beam, parse_utc):
+def _(
+    AccumulationMode,
+    AfterProcessingTime,
+    AfterWatermark,
+    Any,
+    Duration,
+    FixedWindows,
+    TimestampedValue,
+    beam,
+    parse_utc,
+):
     def build_windowed_totals_pipeline(
         pipeline: Any,
         events: list[dict[str, Any]],
@@ -315,14 +325,7 @@ def _(Any, beam, parse_utc):
         Usar Create, TimestampedValue, Filter, WindowInto, una clave por
         comercio, CombinePerKey y metadatos de WindowParam.
         """
-        # Importaciones locales para mantener cohesión del módulo
-        from apache_beam import TimestampedValue
-        from apache_beam.transforms.window import FixedWindows, Duration
-        from apache_beam.transforms.trigger import (
-            AfterWatermark,
-            AfterProcessingTime,
-            AccumulationMode,
-        )
+
 
         class _FormatTotalsDoFn(beam.DoFn):
             """Formatear totales por comercio agregando metadatos de ventana."""
@@ -423,7 +426,15 @@ def _(Any, SetStateSpec, StrUtf8Coder, TimeDomain, TimerSpec, beam, on_timer):
 
 
 @app.cell
-def _(Any):
+def _(
+    AccumulationMode,
+    AfterProcessingTime,
+    AfterWatermark,
+    Any,
+    Duration,
+    FixedWindows,
+    WindowInto,
+):
     def build_trigger_policy(
         *,
         window_seconds: int = 60,
@@ -434,16 +445,7 @@ def _(Any):
         Configurar un pane on-time por watermark, una estimación early por
         processing time, revisiones late y modo ACCUMULATING.
         """
-        from apache_beam.transforms.window import (
-            WindowInto,
-            FixedWindows,
-            Duration,
-        )
-        from apache_beam.transforms.trigger import (
-            AfterWatermark,
-            AfterProcessingTime,
-            AccumulationMode,
-        )
+
 
         # Componer el trigger:
         # - on-time: el pane principal se dispara cuando el watermark cruza el
