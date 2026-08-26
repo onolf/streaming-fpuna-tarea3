@@ -9,7 +9,7 @@ de trabajo realizado durante la implementación de `notebook.py`.
 - [x] `test_assign_fixed_window_uses_event_time`
 - [x] `test_duplicate_does_not_change_total`
 - [x] `test_deduplication_is_isolated_by_merchant`
-- [ ] `test_stateful_dofn_keeps_keys_isolated`
+- [x] `test_stateful_dofn_keeps_keys_isolated`
 - [x] `test_out_of_order_event_uses_its_event_time_window`
 - [x] `test_late_event_within_tolerance_is_a_revision`
 - [x] `test_event_beyond_lateness_is_audited`
@@ -97,3 +97,21 @@ tests/test_assignment.py .                                                      
 ```
 
 **Resultado:** PASSED. Timer expire handler limpia correctamente el estado de duplicados.
+
+### `test_stateful_dofn_keeps_keys_isolated`, `test_timer_handler_clears_state`
+
+```
+$ uv run pytest tests/test_assignment.py::test_stateful_dofn_keeps_keys_isolated tests/test_assignment.py::test_timer_handler_clears_state
+============================================================================= test session starts ==============================================================================
+platform linux -- Python 3.12.14, pytest-8.4.2, pluggy-1.6.0
+rootdir: /mnt/c/Users/o_nolf.CENTRAL.002/projects/streaming-fpuna-tarea3
+configfile: pyproject.toml
+plugins: anyio-4.14.2, logfire-4.41.0
+collected 2 items
+
+tests/test_assignment.py ..                                                                                                                                              [100%]
+
+============================================================================== 2 passed in 1.56s ===============================================================================
+```
+
+**Resultado:** PASSED (2/2). Corregido bug en `DeduplicatePayments.process`: emitir el KV completo (element) en lugar del dict (event).
