@@ -114,18 +114,18 @@ def _(datetime):
         """Retornar los límites [inicio, fin) de la ventana fija."""
         if not isinstance(timestamp, datetime):
             raise ValueError(f"Expected datetime, got {type(timestamp).__name__}")
-    
+
         # Obtener epoch seconds usando el método nativo de datetime
         ts_seconds = timestamp.timestamp()
-    
+
         # Calcular el inicio de la ventana alineado al tamaño
         window_start_seconds = int(ts_seconds // size_seconds * size_seconds)
-    
+
         # Reconstruir datetimes preservando la zona horaria original
         tz = timestamp.tzinfo
         window_start = datetime.fromtimestamp(window_start_seconds, tz=tz)
         window_end = datetime.fromtimestamp(window_start_seconds + size_seconds, tz=tz)
-    
+
         return window_start, window_end
 
     return (assign_fixed_window,)
@@ -303,7 +303,7 @@ def _(mo):
 
 
 @app.cell
-def _(Any):
+def _(Any, beam, parse_utc):
     def build_windowed_totals_pipeline(
         pipeline: Any,
         events: list[dict[str, Any]],
@@ -315,9 +315,70 @@ def _(Any):
         Usar Create, TimestampedValue, Filter, WindowInto, una clave por
         comercio, CombinePerKey y metadatos de WindowParam.
         """
-        raise NotImplementedError(
-            "TODO 4: implementar build_windowed_totals_pipeline"
+        # Importaciones locales para mantener cohesión del módulo
+        from apache_beam import TimestampedValue
+        from apache_beam.transforms.window import FixedWindows, Duration
+        from apache_beam.transforms.trigger import (
+            AfterWatermark,
+            AfterProcessingTime,
+            AccumulationMode,
         )
+
+        class _FormatTotalsDoFn(beam.DoFn):
+            """Formatear totales por comercio agregando metadatos de ventana."""
+
+            def process(
+                self,
+                element: tuple[str, float],
+                window=beam.DoFn.WindowParam,
+            ):
+                merchant_id, total = element
+                yield {
+                    "merchant_id": merchant_id,
+                    "window_start": window.start.to_utc_datetime().isoformat(),
+                    "window_end": window.end.to_utc_datetime().isoformat(),
+                    "total": total,
+                }
+
+        # Paso 1: crear la PCollection inicial a partir de la lista de eventos
+        # Paso 2: filtrar únicamente los pagos con estado CONFIRMED
+        # Paso 3: asignar el timestamp de event_time usando TimestampedValue
+        timestamped_events = (
+            pipeline
+            | "CreateEvents" >> beam.Create(events)
+            | "FilterConfirmed" >> beam.Filter(
+                lambda event: event.get("status") == "CONFIRMED"
+            )
+            | "AttachEventTime" >> beam.Map(
+                lambda event: TimestampedValue(
+                    event, parse_utc(event["event_time"]).timestamp()
+                )
+            )
+        )
+
+        # Paso 4: aplicar ventana fija con lateness permitido y triggers acumulativos
+        windowed_events = (
+            timestamped_events
+            | "WindowInto" >> beam.WindowInto(
+                FixedWindows(window_seconds),
+                allowed_lateness=Duration(seconds=120),
+                trigger=AfterWatermark(early=AfterProcessingTime(5)),
+                accumulation_mode=AccumulationMode.ACCUMULATING,
+            )
+        )
+
+        # Paso 5: emitir pares (merchant_id, amount) y agregar con CombinePerKey
+        # Paso 6: proyectar el resultado con los límites de ventana vía WindowParam
+        totals_by_window = (
+            windowed_events
+            | "KeyByMerchant" >> beam.Map(
+                lambda event: (event["merchant_id"], event.get("amount", 0))
+            )
+            | "SumPerMerchant" >> beam.CombinePerKey(sum)
+            | "FormatTotals" >> beam.ParDo(_FormatTotalsDoFn())
+        )
+
+        return totals_by_window
 
     return
 
