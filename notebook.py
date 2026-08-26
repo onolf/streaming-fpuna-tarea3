@@ -502,7 +502,12 @@ def _(mo):
 def _(Any):
     def make_idempotency_key(result: dict[str, Any]) -> str:
         """Construir merchant_id|window_start para un resultado lógico."""
-        raise NotImplementedError("TODO 7: implementar make_idempotency_key")
+        # La clave idempotente identifica de forma única un resultado lógico:
+        # combina el comercio con el inicio de su ventana para que un reintento
+        # apunte exactamente a la misma entidad en el sink.
+        merchant_id = result["merchant_id"]
+        window_start = result["window_start"]
+        return f"{merchant_id}|{window_start}"
 
     def simulate_sink_retries(
         results: list[dict[str, Any]],
@@ -515,7 +520,46 @@ def _(Any):
         En modo idempotente, múltiples intentos del mismo resultado deben dejar
         una sola fila materializada. En modo append, cada intento agrega una.
         """
-        raise NotImplementedError("TODO 8: implementar simulate_sink_retries")
+        # Estructuras internas del sink según el modo de operación.
+        # POST append-only usa una lista; UPSERT idempotente usa un dict
+        # indexado por la clave lógica para que reintentos sobrescriban.
+        audit: list[dict[str, Any]] = []
+
+        if idempotent:
+            # Modo UPSERT idempotente: el segundo intento del mismo resultado
+            # reemplaza la fila existente en lugar de duplicarla.
+            upsert_sink: dict[str, dict[str, Any]] = {}
+            for attempt_number in range(1, attempts + 1):
+                for result_row in results:
+                    idempotency_key = make_idempotency_key(result_row)
+                    audit.append({
+                        "attempt": attempt_number,
+                        "mode": "UPSERT",
+                        "idempotency_key": idempotency_key,
+                        "row": result_row,
+                    })
+                    # La sobrescritura por clave garantiza una sola entidad final.
+                    upsert_sink[idempotency_key] = result_row
+            # El estado visible del sink son los valores almacenados por clave.
+            materialized = list(upsert_sink.values())
+        else:
+            # Modo POST append-only: cada intento genera una fila nueva
+            # aunque la clave lógica sea la misma.
+            append_sink: list[dict[str, Any]] = []
+            for attempt_number in range(1, attempts + 1):
+                for result_row in results:
+                    idempotency_key = make_idempotency_key(result_row)
+                    audit.append({
+                        "attempt": attempt_number,
+                        "mode": "POST",
+                        "idempotency_key": idempotency_key,
+                        "row": result_row,
+                    })
+                    # El append siempre acumula una fila adicional.
+                    append_sink.append(result_row)
+            materialized = append_sink
+
+        return materialized, audit
 
     return
 
