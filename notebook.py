@@ -399,16 +399,25 @@ def _(Any, SetStateSpec, StrUtf8Coder, TimeDomain, TimerSpec, beam, on_timer):
             expiry=beam.DoFn.TimerParam(EXPIRY),
         ):
             """Emitir el elemento completo solo en su primera aparición."""
-            raise NotImplementedError(
-                "TODO 5: implementar DeduplicatePayments.process"
-            )
+            merchant_id, event = element
+            event_id = event["event_id"]
+
+            # Si el event id ya fue visto en esta ventana, descartar el duplicado
+            if event_id in seen_ids.read():
+                return
+
+            # Registrar el event id como visto y emitir el evento
+            seen_ids.add(event_id)
+            # Programar el timer para limpiar el estado cuando termine la ventana.
+            # El watermark no alcanzará window.end hasta window.end + allowed lateness,
+            # momento en que ya no se aceptarán más eventos tardíos para esta ventana.
+            expiry.set(window.end)
+            yield event
 
         @on_timer(EXPIRY)
         def expire(self, seen_ids=beam.DoFn.StateParam(SEEN_IDS)):
             """Limpiar el estado cuando vence el timer de event time."""
-            raise NotImplementedError(
-                "TODO 5b: implementar DeduplicatePayments.expire"
-            )
+            seen_ids.clear()
 
     return
 
