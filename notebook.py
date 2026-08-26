@@ -513,12 +513,15 @@ def _(Any):
                     idempotency_key = make_idempotency_key(result_row)
                     audit.append({
                         "attempt": attempt_number,
-                        "mode": "UPSERT",
+                        "operation": "UPSERT",
                         "idempotency_key": idempotency_key,
                         "row": result_row,
                     })
                     # La sobrescritura por clave garantiza una sola entidad final.
-                    upsert_sink[idempotency_key] = result_row
+                    upsert_sink[idempotency_key] = {
+                        **result_row,
+                        "idempotency_key": idempotency_key,
+                    }
             # El estado visible del sink son los valores almacenados por clave.
             materialized = list(upsert_sink.values())
         else:
@@ -530,12 +533,15 @@ def _(Any):
                     idempotency_key = make_idempotency_key(result_row)
                     audit.append({
                         "attempt": attempt_number,
-                        "mode": "POST",
+                        "operation": "POST",
                         "idempotency_key": idempotency_key,
                         "row": result_row,
                     })
                     # El append siempre acumula una fila adicional.
-                    append_sink.append(result_row)
+                    append_sink.append({
+                        **result_row,
+                        "idempotency_key": idempotency_key,
+                    })
             materialized = append_sink
 
         return materialized, audit
