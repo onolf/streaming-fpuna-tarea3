@@ -17,7 +17,7 @@ de trabajo realizado durante la implementación de `notebook.py`.
 - [ ] `test_trigger_policy_has_lateness_and_accumulating_panes`
 - [ ] `test_retries_converge_to_one_materialized_entity`
 - [ ] `test_append_only_sink_materializes_every_attempt`
-- [ ] `test_timer_handler_clears_state`
+- [x] `test_timer_handler_clears_state`
 
 ## Log de ejecuciones
 
@@ -79,3 +79,21 @@ tests/test_assignment.py::test_deduplication_is_isolated_by_merchant PASSED     
 ```
 
 **Resultado:** PASSED (5/5). Corregidos previamente 2 bugs en `summarize_payments`: formato ISO de `window_start`/`window_end` (offset `+00:00` en vez de `Z`) y casing de `reason` (`accepted`/`duplicate`/`too_late` en minúsculas).
+
+### `test_timer_handler_clears_state`
+
+```
+$ uv run pytest tests/test_assignment.py::test_timer_handler_clears_state
+=========================================================================================================== test session starts ============================================================================================================
+platform linux -- Python 3.12.14, pytest-8.4.2, pluggy-1.6.0
+rootdir: /mnt/c/Users/o_nolf.CENTRAL.002/projects/streaming-fpuna-tarea3
+configfile: pyproject.toml
+plugins: anyio-4.14.2, logfire-4.41.0
+collected 1 item
+
+tests/test_assignment.py .                                                                                                                                                                                                           [100%]
+
+============================================================================================================ 1 passed in 0.09s =============================================================================================================
+```
+
+**Resultado:** PASSED. Timer expire handler limpia correctamente el estado de duplicados.
